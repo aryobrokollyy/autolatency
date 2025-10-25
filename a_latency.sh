@@ -3,7 +3,7 @@
 # Log: /var/log/a_latency_exec.log
 
 # ================== Versi Script (WAJIB DIPERTAHANKAN DI ATAS) ==================
-VERSION="1.4.0"   # <- ganti saat rilis baru
+VERSION="1.4.1"   # <- ganti saat rilis baru
 
 # ================== Identitas Router ==================
 HOSTNAME=$(ubus call system board | jsonfilter -e '@.hostname')
