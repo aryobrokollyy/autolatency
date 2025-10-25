@@ -1,30 +1,46 @@
 #!/bin/sh
-# a_latency.sh — Auto test latency YACD/OpenClash (robust JSON handling + update notifier)
+# a_latency.sh — Auto test latency YACD/OpenClash (robust JSON handling + update notifier + log rotation)
 # Log: /var/log/a_latency_exec.log
 
-# ================== Versi Script (WAJIB DIPERTAHANKAN DI ATAS) ==================
-VERSION="1.4.1"   # <- ganti saat rilis baru
+# ================== Versi Script ==================
+VERSION="1.4.1"   # update log rotation feature
 
 # ================== Identitas Router ==================
 HOSTNAME=$(ubus call system board | jsonfilter -e '@.hostname')
 
-# ================== Logging ==================
+# ================== Logging + Auto Reset ==================
 LOGFILE="/var/log/a_latency_exec.log"
+LOG_MAX_AGE_HOURS=2   # reset log jika lebih dari 2 jam
+
 DATE_FMT() { date '+%Y-%m-%d %H:%M:%S'; }
 log_info()  { echo "$(DATE_FMT) [INFO]  $*" >> "$LOGFILE"; logger -t a_latency "[INFO] $*"; }
 log_error() { echo "$(DATE_FMT) [ERROR] $*" >> "$LOGFILE"; logger -t a_latency "[ERROR] $*"; }
+
+# --- Auto reset log jika lebih dari 2 jam ---
+if [ -f "$LOGFILE" ]; then
+  NOW_TS=$(date +%s)
+  MOD_TS=$(date +%s -r "$LOGFILE")
+  AGE_HR=$(( (NOW_TS - MOD_TS) / 3600 ))
+  if [ "$AGE_HR" -ge "$LOG_MAX_AGE_HOURS" ]; then
+    mv "$LOGFILE" "${LOGFILE%.*}_$(date +%Y%m%d_%H%M).log"
+    echo "$(DATE_FMT) [INFO] Log rotated (age ${AGE_HR}h)" > "$LOGFILE"
+    logger -t a_latency "[INFO] Log rotated (age ${AGE_HR}h)"
+  fi
+else
+  touch "$LOGFILE"
+fi
 
 # ================== Konfigurasi OpenClash API ==================
 API_URL="http://127.0.0.1:9090"
 SECRET="aira"
 THRESH=300
 
-# ================== Telegram (opsional—isi agar aktif) ==================
+# ================== Telegram (opsional) ==================
 TG_TOKEN=$(uci get telegram.settings.bot_token 2>/dev/null)
 TG_CHAT_ID=$(uci get telegram.settings.group_id 2>/dev/null)
 TG_THREAD_ID="51869"
 
-# ================== Skip daftar proxy ini ==================
+# ================== Skip daftar proxy ==================
 SKIP_REGEX="^(DIRECT|REJECT|GLOBAL)$"
 
 # ================== State anti-spam notifikasi ==================
@@ -32,14 +48,9 @@ STATE_DIR="/var/run/openclash-latency"
 mkdir -p "$STATE_DIR" 2>/dev/null
 
 # ================== Konfigurasi Update Checker ==================
-# WAJIB: arahkan ke raw path file script ini di GitHub Anda.
-# Contoh: https://raw.githubusercontent.com/<user>/<repo>/<branch>/a_latency.sh
-GITHUB_RAW_URL="https://raw.githubusercontent.com/USER/REPO/BRANCH/a_latency.sh"
-# Opsional: URL repo/commit log untuk referensi di notifikasi
-GITHUB_REPO_URL="https://github.com/USER/REPO"
-# Lokasi penyimpanan file download calon update
+GITHUB_RAW_URL="https://raw.githubusercontent.com/aryobrokollyy/autolatency/refs/heads/main/a_latency.sh"
+GITHUB_REPO_URL="https://github.com/aryobrokollyy/autolatency"
 NEW_FILE_PATH="/usr/local/bin/a_latency.sh.new"
-# Flag file: penanda ada update
 UPDATE_FLAG_FILE="/etc/a_latency_update_available"
 
 # ================== Cek Dependensi ==================
@@ -68,14 +79,11 @@ tg_send() {
   fi
 }
 
-# ================== Helper: bandingkan versi semver (x.y.z) ==================
-# return 0 jika $1 < $2 (butuh update), 1 jika sebaliknya
+# ================== Helper: bandingkan versi semver ==================
 ver_lt() {
-  # normalisasi jadi tiga segmen
   A=$(printf "%s" "$1" | awk -F. '{printf("%d.%d.%d", $1,$2,$3)}')
   B=$(printf "%s" "$2" | awk -F. '{printf("%d.%d.%d", $1,$2,$3)}')
   [ "$A" = "$B" ] && return 1
-  # bandingkan per segmen
   IFS=.; set -- $A; a1=$1; a2=$2; a3=$3
   IFS=.; set -- $B; b1=$1; b2=$2; b3=$3
   if [ "$a1" -lt "$b1" ]; then return 0; fi
@@ -90,7 +98,6 @@ ver_lt() {
 check_update() {
   [ -z "$GITHUB_RAW_URL" ] && return 0
 
-  # Ambil header (maks 8KB) supaya ringan
   REMOTE_HEAD=$(curl -fsSL --max-time 8 "$GITHUB_RAW_URL" | sed -n '1,80p')
   if [ -z "$REMOTE_HEAD" ]; then
     log_error "Gagal cek update (tidak bisa ambil raw GitHub)."
@@ -99,7 +106,6 @@ check_update() {
 
   REMOTE_VERSION=$(printf "%s" "$REMOTE_HEAD" | grep -E '^VERSION="' | head -n1 | sed -E 's/^VERSION="([^"]+)".*$/\1/')
   if [ -z "$REMOTE_VERSION" ]; then
-    # fallback: cari di seluruh file
     REMOTE_VERSION=$(curl -fsSL --max-time 12 "$GITHUB_RAW_URL" | grep -E '^VERSION="' | head -n1 | sed -E 's/^VERSION="([^"]+)".*$/\1/')
   fi
 
@@ -109,27 +115,23 @@ check_update() {
   fi
 
   if ver_lt "$VERSION" "$REMOTE_VERSION"; then
-    # Ada versi baru
     log_info "Update tersedia: local=$VERSION < remote=$REMOTE_VERSION"
-    # Unduh calon update
     if curl -fsSL --max-time 20 "$GITHUB_RAW_URL" -o "$NEW_FILE_PATH"; then
       chmod +x "$NEW_FILE_PATH"
       echo "UPDATE_AVAILABLE=$REMOTE_VERSION $(DATE_FMT)" > "$UPDATE_FLAG_FILE"
       log_info "File update disimpan: $NEW_FILE_PATH (v$REMOTE_VERSION). Flag: $UPDATE_FLAG_FILE"
-
-      tg_send "🔔 *Update a_latency.sh tersedia*\nRouter: $HOSTNAME\nVersi saat ini: $VERSION\nVersi baru: $REMOTE_VERSION\nFile baru: $NEW_FILE_PATH\nRepo: $GITHUB_REPO_URL\n\nJalankan untuk update:\nmv $NEW_FILE_PATH /usr/local/bin/a_latency.sh && chmod +x /usr/local/bin/a_latency.sh"
+      tg_send "🔔 *Update a_latency.sh tersedia*\nRouter: $HOSTNAME\nVersi saat ini: $VERSION\nVersi baru: $REMOTE_VERSION\nFile baru: $NEW_FILE_PATH\nRepo: $GITHUB_REPO_URL\n\nTerapkan update:\nmv $NEW_FILE_PATH /usr/local/bin/a_latency.sh && chmod +x /usr/local/bin/a_latency.sh"
     else
       log_error "Gagal mengunduh file update dari GitHub."
       tg_send "⚠️ Gagal unduh update a_latency.sh dari GitHub. Coba ulangi nanti.\nRepo: $GITHUB_REPO_URL"
     fi
   else
-    # Tidak ada update
     [ -f "$UPDATE_FLAG_FILE" ] && rm -f "$UPDATE_FLAG_FILE"
     log_info "Tidak ada update. Versi lokal ($VERSION) sudah terbaru (remote=$REMOTE_VERSION)."
   fi
 }
 
-# ================== Jalankan cek update (sebelum tes latency) ==================
+# ================== Jalankan cek update ==================
 check_update
 
 # ================== Step 1: Cek API reachable ==================
@@ -151,7 +153,7 @@ fi
 COUNT=$(echo "$PROXIES_JSON" | jq '.proxies | keys | length')
 log_info "Proxy list OK. Found $COUNT proxies."
 
-# ================== Helper: ambil delay saat ini (robust) ==================
+# ================== Helper: ambil delay saat ini ==================
 get_current_delay() {
   DETAIL_JSON="$1"
   T=$(printf '%s' "$DETAIL_JSON" | jq -r 'type' 2>/dev/null)
