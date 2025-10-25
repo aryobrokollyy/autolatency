@@ -3,14 +3,14 @@
 # Log: /var/log/a_latency_exec.log
 
 # ================== Versi Script ==================
-VERSION="1.4.1"   # update log rotation feature
+VERSION="1.4.2"
 
 # ================== Identitas Router ==================
 HOSTNAME=$(ubus call system board | jsonfilter -e '@.hostname')
 
 # ================== Logging + Auto Reset ==================
 LOGFILE="/var/log/a_latency_exec.log"
-LOG_MAX_AGE_HOURS=2   # reset log jika lebih dari 2 jam
+LOG_MAX_AGE_HOURS=2
 
 DATE_FMT() { date '+%Y-%m-%d %H:%M:%S'; }
 log_info()  { echo "$(DATE_FMT) [INFO]  $*" >> "$LOGFILE"; logger -t a_latency "[INFO] $*"; }
